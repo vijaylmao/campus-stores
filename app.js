@@ -221,13 +221,21 @@
     return html;
   }
   function register() {
+    const filmLoans = s.loans.filter((l) => l.req === "RQ-214");
+    const filmOpen = filmLoans.filter((l) => !l.back);
+    const bulkControl = s.phase === 0 && !filmLoans.length
+      ? btn("Issue Film Society kit · 3 items", "bulk-issue", "", "primary")
+      : "";
     let html = head(
       "Loan register",
-      "One slip per physical unit",
-      s.editing
-        ? btn("Cancel", "cancel")
-        : btn("New issue slip", "new", "", "primary"),
+      "One slip per physical unit · grouped by request",
+      s.editing ? btn("Cancel", "cancel") : (bulkControl || btn("New issue slip", "new", "", "primary")),
     );
+    if (filmLoans.length) {
+      html += '<div class="record"><small>RQ-214 · FILM SOCIETY</small><h3>Courtyard screening kit</h3><p>' + filmOpen.length + ' of 3 items still outstanding · Collected by Kabir Sen</p><p>' + filmLoans.map((l) => esc(l.asset) + (l.back ? ' · Returned' : ' · Outstanding')).join(' &nbsp; | &nbsp;') + '</p></div>';
+    } else if (s.phase === 0) {
+      html += '<div class="record"><small>QUICK CHECKOUT</small><h3>Issue the approved kit together</h3><p>Creates three linked slips for Kabir Sen: projector PR-04, speaker SP-02 and USB-C adapter AD-12. The repair unit is excluded.</p></div>';
+    }
     if (s.editing) {
       const available = assets.filter((a) => !a.repair && !out(a.id));
       const select = (label, key, options) =>
@@ -289,8 +297,10 @@
         "L-" + l.num + " · " + l.asset,
         l.req + " · " + l.who + " · Due " + l.due,
         l.back
-          ? badge("Returned")
-          : btn("Record return", "return", String(l.num)),
+          ? badge("Returned", true)
+          : (s.phase === 2 && l.req === "RQ-214" && getAsset(l.asset).type === "USB-C → HDMI adapter"
+              ? btn("Confirm Leela’s adapter", "return-adapter", String(l.num), "primary")
+              : btn("Record return", "return", String(l.num))),
       );
     return html;
   }
@@ -384,8 +394,17 @@
         s = original();
         break;
       case "advance":
-        if (s.phase < 2) s.phase++;
-        s.notice = "Shift time updated.";
+        if (s.phase === 1) {
+          const openFilm = s.loans.filter((l) => l.req === "RQ-214" && !l.back);
+          if (openFilm.length && !s.notes.some((n) => n.text.includes("AUTO HANDOVER · RQ-214"))) {
+            s.notes.push({ phase: 1, text: "AUTO HANDOVER · RQ-214: Projector and speaker returned at 7:30 pm. Adapter " + openFilm.map((l) => l.asset).join(", ") + " remains outstanding. Leela Das is expected at 9:00 am Saturday. Confirm the adapter serial before closing its slip." });
+          }
+          s.phase = 2;
+          s.notice = "Morning handover ready. The adapter remains outstanding against Film Society.";
+        } else if (s.phase < 2) {
+          s.phase++;
+          s.notice = "Shift time updated.";
+        }
         break;
       case "tab":
         s.tab = v;
@@ -406,6 +425,33 @@
       case "scope":
         s.onlyOpen = v === "0";
         break;
+      case "bulk-issue": {
+        if (s.phase !== 0 || s.loans.some((l) => l.req === "RQ-214")) return;
+        const kit = [
+          { asset: "PR-04", due: "Fri 8 pm" },
+          { asset: "SP-02", due: "Fri 8 pm" },
+          { asset: "AD-12", due: "Fri 8 pm" },
+        ];
+        if (kit.some((x) => !getAsset(x.asset) || getAsset(x.asset).repair || out(x.asset))) {
+          s.notice = "Kit unavailable. Check inventory and issue each available unit manually.";
+          commit();
+          return;
+        }
+        for (const item of kit) {
+          const num = Math.max(...s.loans.map((l) => l.num)) + 1;
+          s.loans.push({ num, req: "RQ-214", asset: item.asset, who: "Kabir Sen", due: item.due, back: false });
+        }
+        s.tab = "Loan register";
+        s.notice = "Film Society kit issued to Kabir Sen: 3 linked slips saved.";
+        break;
+      }
+      case "return-adapter": {
+        const l = s.loans.find((l) => l.num === Number(v));
+        if (!l || l.back || l.req !== "RQ-214" || getAsset(l.asset).type !== "USB-C → HDMI adapter" || s.phase !== 2) return;
+        l.back = true;
+        s.notice = "Adapter " + l.asset + " received from Leela Das. Film Society loan is now complete.";
+        break;
+      }
       case "return": {
         const l = s.loans.find((l) => l.num === Number(v));
         if (!l || l.back) return;
